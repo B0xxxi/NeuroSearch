@@ -1,0 +1,48 @@
+# Команды Git для инициализации нового репозитория:
+
+# Инициализация нового репозитория
+git init
+
+# Добавление всех файлов в индекс
+git add .
+
+# Создание первого коммита
+git commit -m "Первоначальная версия консольного поискового суммаризатора"
+
+# Добавление удаленного репозитория (замените URL на ваш)
+git remote add origin https://github.com/yourusername/console-search-summarizer.git
+
+# Отправка изменений в удаленный репозиторий
+git push -u origin main
+
+# Другие полезные команды:
+
+# Проверка статуса репозитория
+git status
+
+# Просмотр истории коммитов
+git log
+
+# Создание новой ветки
+git checkout -b feature/new-feature
+
+# Переключение между ветками
+git checkout main
+
+# Слияние веток
+git merge feature/new-feature
+
+# Клонирование существующего репозитория
+git clone https://github.com/yourusername/console-search-summarizer.git
+
+# Получение изменений из удаленного репозитория
+git pull origin main
+
+# Отмена изменений в рабочей директории
+git checkout -- <file>
+
+# Отмена последнего коммита (сохраняя изменения)
+git reset --soft HEAD~1
+
+# Игнорирование файлов (.gitignore уже создан)
+# Просто добавьте нужные файлы/директории в .gitignore
