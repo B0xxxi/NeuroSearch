@@ -4,6 +4,7 @@ import google.generativeai as genai
 import os
 import random
 import time
+import platform
 from datetime import datetime
 from dotenv import load_dotenv
 from googleapiclient.discovery import build
@@ -18,6 +19,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, NoSuchElementException, StaleElementReferenceException
 from webdriver_manager.chrome import ChromeDriverManager
+from webdriver_manager.core.os_manager import ChromeType
 
 # Загружаем переменные окружения из файла .env
 load_dotenv()
@@ -30,6 +32,9 @@ GOOGLE_CSE_ID = os.getenv("GOOGLE_CSE_ID")
 # Параметры для управления частотой запросов
 THROTTLE_DELAY = 2.0  # задержка между запросами в секундах
 LAST_REQUEST_TIME = 0  # время последнего запроса
+
+# Режим отладки (установите True для вывода отладочных сообщений)
+DEBUG_MODE = True
 
 # Проверка наличия необходимых API ключей
 if not GOOGLE_API_KEY:
@@ -67,6 +72,10 @@ def get_random_user_agent():
 
 def log_message(message, log_type="info"):
     """Логирует сообщение в консоль с временной меткой"""
+    # Если это отладочное сообщение и режим отладки выключен, не выводим его
+    if log_type.lower() == "debug" and not DEBUG_MODE:
+        return
+        
     timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
     print(f"[{timestamp}] [{log_type.upper()}] {message}")
 
@@ -99,19 +108,77 @@ def create_webdriver():
     options.add_argument("--disable-notifications")
     options.add_argument("--lang=ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7")
     options.add_argument("--window-size=1920,1080")  # Устанавливаем размер окна
-
-    # Установка и использование Chrome через webdriver-manager
-    service = Service(ChromeDriverManager().install())
-    driver = webdriver.Chrome(service=service, options=options)
-
-    # Устанавливаем таймаут для явного ожидания элементов
-    driver.implicitly_wait(10)
-
-    # Добавляем скрипт для дополнительной маскировки автоматизации
-    driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-
-    log_message("WebDriver успешно инициализирован")
-    return driver
+    
+    try:
+        # Определяем операционную систему
+        system = platform.system()
+        log_message(f"Определена операционная система: {system}")
+        
+        if system == "Windows":
+            # Для Windows используем специальный подход
+            log_message("Используем специальную конфигурацию для Windows")
+            
+            # Пробуем использовать ChromeDriverManager с указанием типа Chrome
+            try:
+                driver_path = ChromeDriverManager(chrome_type=ChromeType.GOOGLE).install()
+                log_message(f"Установлен ChromeDriver по пути: {driver_path}")
+                service = Service(driver_path)
+            except Exception as e:
+                log_message(f"Ошибка при установке ChromeDriver через ChromeDriverManager: {e}", "warning")
+                
+                # Альтернативный подход - использовать встроенный ChromeDriver в Selenium 4
+                log_message("Пробуем использовать встроенный ChromeDriver в Selenium 4")
+                service = Service()
+        else:
+            # Для других ОС используем стандартный подход
+            service = Service(ChromeDriverManager().install())
+        
+        # Создаем драйвер с настроенным сервисом и опциями
+        driver = webdriver.Chrome(service=service, options=options)
+        
+        # Устанавливаем таймаут для явного ожидания элементов
+        driver.implicitly_wait(10)
+        
+        # Добавляем скрипт для дополнительной маскировки автоматизации
+        driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+        
+        log_message("WebDriver успешно инициализирован")
+        return driver
+        
+    except Exception as e:
+        log_message(f"Ошибка при инициализации WebDriver: {e}", "error")
+        log_message("Пробуем альтернативный метод инициализации...", "info")
+        
+        try:
+            # Альтернативный метод - использовать Chrome напрямую без ChromeDriverManager
+            if system == "Windows":
+                # Для Windows пробуем найти Chrome в стандартных местах
+                chrome_paths = [
+                    "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+                    "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+                    os.environ.get("LOCALAPPDATA", "") + "\\Google\\Chrome\\Application\\chrome.exe"
+                ]
+                
+                chrome_path = None
+                for path in chrome_paths:
+                    if os.path.exists(path):
+                        chrome_path = path
+                        break
+                
+                if chrome_path:
+                    log_message(f"Найден Chrome по пути: {chrome_path}")
+                    options.binary_location = chrome_path
+            
+            # Создаем драйвер без указания пути к ChromeDriver
+            driver = webdriver.Chrome(options=options)
+            log_message("WebDriver успешно инициализирован альтернативным методом")
+            return driver
+            
+        except Exception as e2:
+            log_message(f"Критическая ошибка при инициализации WebDriver: {e2}", "error")
+            log_message("Рекомендации: убедитесь, что Chrome установлен в системе и доступен", "error")
+            log_message("Также можно попробовать установить ChromeDriver вручную и указать путь к нему", "error")
+            raise
 
 
 def search_relevant_urls_yandex_selenium(topic, num_results=5):
@@ -252,6 +319,7 @@ def search_relevant_urls_duckduckgo_selenium(topic, num_results=5):
 
         # Извлекаем ссылки из результатов поиска, пробуя разные селекторы
         results = []
+        search_results = []
         
         # Список возможных селекторов для ссылок
         link_selectors = [
@@ -261,16 +329,19 @@ def search_relevant_urls_duckduckgo_selenium(topic, num_results=5):
             ".react-results--main .result a[href]",
             ".nrn-react-div a[href]",
             "article a[href]",
-            "a[data-testid='result-title-a']"
+            "a[data-testid='result-title-a']",
+            ".react-results--main a[href]"
         ]
         
+        # Пробуем каждый селектор и собираем все найденные результаты
         for selector in link_selectors:
             try:
-                search_results = driver.find_elements(By.CSS_SELECTOR, selector)
-                if search_results:
-                    log_message(f"Найдено {len(search_results)} элементов по селектору {selector}")
-                    break
-            except Exception:
+                elements = driver.find_elements(By.CSS_SELECTOR, selector)
+                if elements:
+                    log_message(f"Найдено {len(elements)} элементов по селектору {selector}")
+                    search_results.extend(elements)
+            except Exception as e:
+                log_message(f"Ошибка при поиске по селектору {selector}: {e}", "warning")
                 continue
         
         # Если не нашли результаты по селекторам, попробуем найти все ссылки и отфильтровать
@@ -280,9 +351,16 @@ def search_relevant_urls_duckduckgo_selenium(topic, num_results=5):
 
         log_message(f"Найдено {len(search_results)} элементов-результатов поиска")
 
-        for result in search_results:
+        # Отладочная информация - выводим все найденные ссылки
+        log_message("Начинаем извлечение URL из найденных элементов", "info")
+        
+        for i, result in enumerate(search_results):
             try:
                 href = result.get_attribute("href")
+                text = result.text.strip() if result.text else ""
+                
+                log_message(f"Элемент #{i+1}: текст='{text[:30]}...', href='{href}'", "debug")
+                
                 # Фильтруем только внешние ссылки
                 if (href and 
                     href.startswith("http") and 
@@ -297,10 +375,59 @@ def search_relevant_urls_duckduckgo_selenium(topic, num_results=5):
                 log_message(f"Ошибка при извлечении ссылки: {e}", "warning")
                 continue
 
+        # Если не нашли ссылки, попробуем прямой JavaScript-подход
+        if not results:
+            log_message("Пробуем извлечь ссылки с помощью JavaScript", "info")
+            try:
+                # Извлекаем все ссылки с помощью JavaScript
+                links = driver.execute_script("""
+                    var links = [];
+                    var elements = document.querySelectorAll('a[href]');
+                    for (var i = 0; i < elements.length; i++) {
+                        var href = elements[i].getAttribute('href');
+                        if (href && href.startsWith('http') && 
+                            !href.includes('duckduckgo.com') && 
+                            !href.includes('duck.co') &&
+                            !href.includes('javascript:')) {
+                            links.push({
+                                href: href,
+                                text: elements[i].innerText || ''
+                            });
+                        }
+                    }
+                    return links;
+                """)
+                
+                log_message(f"JavaScript нашел {len(links)} ссылок", "info")
+                
+                for link in links:
+                    href = link.get('href')
+                    text = link.get('text', '')[:30]
+                    log_message(f"JS-ссылка: текст='{text}...', href='{href}'", "debug")
+                    results.append(href)
+                    if len(results) >= num_results:
+                        break
+            except Exception as e:
+                log_message(f"Ошибка при извлечении ссылок через JavaScript: {e}", "warning")
+        
+        # Если все еще нет результатов, попробуем использовать Google вместо DuckDuckGo
+        if not results:
+            log_message("Не удалось найти результаты в DuckDuckGo, пробуем Google как запасной вариант", "warning")
+            try:
+                # Проверяем, доступны ли ключи для Google
+                if GOOGLE_CSE_API_KEY and GOOGLE_CSE_ID:
+                    log_message("Используем Google CSE как запасной вариант", "info")
+                    google_results = search_relevant_urls_google(topic, GOOGLE_CSE_API_KEY, GOOGLE_CSE_ID, num_results)
+                    if google_results:
+                        log_message(f"Найдено {len(google_results)} результатов через Google CSE", "info")
+                        results = google_results
+            except Exception as e:
+                log_message(f"Ошибка при использовании Google как запасного варианта: {e}", "error")
+
         # Удаляем дубликаты
         results = list(dict.fromkeys(results))
         
-        log_message(f"Найдено {len(results)} уникальных результатов в DuckDuckGo")
+        log_message(f"Найдено {len(results)} уникальных результатов в поиске")
         return results
 
     except TimeoutException:
@@ -506,8 +633,14 @@ def main():
     parser.add_argument('topic', type=str, help='Тема для поиска и суммаризации')
     parser.add_argument('--engine', '-e', type=str, choices=['google', 'yandex', 'duckduckgo'], 
                         default='google', help='Поисковый движок (по умолчанию: google)')
+    parser.add_argument('--debug', '-d', action='store_true', 
+                        help='Включить режим отладки для вывода дополнительной информации')
     
     args = parser.parse_args()
+    
+    # Устанавливаем режим отладки, если указан соответствующий аргумент
+    global DEBUG_MODE
+    DEBUG_MODE = args.debug
     
     # Проверяем доступность ChromeDriver
     try:
